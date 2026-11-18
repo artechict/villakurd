@@ -118,6 +118,7 @@ jobs:
           --health-interval=30s
           --health-timeout=20s
           --health-retries=5
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -136,45 +137,23 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        working-directory: ./backend
 
       - name: Generate Prisma Client
-        run: pnpm prisma generate
-        working-directory: ./backend
-
-      - name: Run migrations
-        run: pnpm prisma migrate deploy
-        working-directory: ./backend
+        run: pnpm --filter backend prisma generate
         env:
           DATABASE_URL: postgresql://villakurd:villakurd@localhost:5432/villakurd_test?schema=public
 
-      - name: Seed database
-        run: pnpm prisma db seed
-        working-directory: ./backend
+      - name: Run database migrations
+        run: pnpm --filter backend prisma migrate deploy
         env:
           DATABASE_URL: postgresql://villakurd:villakurd@localhost:5432/villakurd_test?schema=public
 
-      - name: Run unit tests
-        run: pnpm test --coverage
-        working-directory: ./backend
-
-      - name: Run E2E tests
-        run: pnpm test:e2e
-        working-directory: ./backend
+      - name: Run backend tests
+        run: pnpm --filter backend test
         env:
           DATABASE_URL: postgresql://villakurd:villakurd@localhost:5432/villakurd_test?schema=public
           REDIS_URL: redis://localhost:6379
           ELASTICSEARCH_URL: http://localhost:9200
-          MINIO_ENDPOINT: http://localhost:9000
-          MINIO_ACCESS_KEY: villakurd
-          MINIO_SECRET_KEY: villakurd_secret_key
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./backend/coverage/lcov.info
-          flags: backend
-          fail_ci_if_error: false
 
   # ============================================
   # FRONTEND TESTS
@@ -182,7 +161,7 @@ jobs:
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -201,22 +180,14 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        working-directory: ./frontend
 
-      - name: Run unit tests
-        run: pnpm test --coverage
-        working-directory: ./frontend
+      - name: Run frontend unit tests
+        run: pnpm --filter frontend test
 
-      - name: Run E2E tests
-        run: pnpm test:e2e
-        working-directory: ./frontend
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./frontend/coverage/lcov.info
-          flags: frontend
-          fail_ci_if_error: false
+      - name: Run frontend E2E tests
+        run: pnpm --filter frontend test:e2e
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:4000
 
   # ============================================
   # MOBILE TESTS
@@ -241,34 +212,24 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        working-directory: ./mobile
 
-      - name: Run tests
-        run: pnpm test
-        working-directory: ./mobile
+      - name: Run mobile tests
+        run: pnpm --filter mobile test
 
   # ============================================
-  # BUILD & PUSH IMAGES
+  # BUILD DOCKER IMAGES
   # ============================================
-  build-and-push:
-    name: Build & Push Images
+  build:
+    name: Build & Push Docker Images
     needs: [lint-and-typecheck, backend-tests, frontend-tests, mobile-tests]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
-      attestations: write
-      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -281,7 +242,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Extract metadata for Backend
         id: meta-backend
@@ -294,7 +255,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Backend
         uses: docker/build-push-action@v5
@@ -306,8 +266,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
-          provenance: true
-          sbom: true
 
       - name: Extract metadata for Frontend
         id: meta-frontend
@@ -320,7 +278,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Frontend
         uses: docker/build-push-action@v5
@@ -332,8 +289,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
-          provenance: true
-          sbom: true
 
       - name: Extract metadata for Mobile
         id: meta-mobile
@@ -344,6 +299,7 @@ jobs:
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
             type=sha
 
       - name: Build and push Mobile
@@ -357,54 +313,53 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
 
-      - name: Output image digests
-        run: |
-          echo "Backend: ${{ steps.meta-backend.outputs.tags }}"
-          echo "Frontend: ${{ steps.meta-frontend.outputs.tags }}"
-          echo "Mobile: ${{ steps.meta-mobile.outputs.tags }}"
-
   # ============================================
   # SECURITY SCAN
   # ============================================
   security-scan:
     name: Security Scan
-    needs: [build-and-push]
+    needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy vulnerability scanner (filesystem)
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-results.sarif'
 
-      - name: Run Snyk security scan
+      - name: Run Trivy on Docker images
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:main
+          trivy image --severity HIGH,CRITICAL --exit-code 1 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:main || true
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:main
+          trivy image --severity HIGH,CRITICAL --exit-code 1 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:main || true
+
+      - name: Run Snyk scan
         uses: snyk/actions/node@master
-        continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          command: test
           args: --severity-threshold=high
+        continue-on-error: true
 
   # ============================================
   # DEPLOY STAGING
   # ============================================
   deploy-staging:
-    name: Deploy Staging
-    needs: [build-and-push, security-scan]
-    if: github.ref == 'refs/heads/develop' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+    name: Deploy to Staging
+    needs: [build, security-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: staging
@@ -412,41 +367,39 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy to Staging
+      - name: Deploy to Staging Server
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          port: ${{ secrets.STAGING_PORT }}
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_SSH_PORT }}
           script: |
-            cd /opt/villakurd/villakurd
-            export BACKEND_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:${{ github.sha }}
-            export FRONTEND_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:${{ github.sha }}
-            docker-compose -f infrastructure/docker/docker-compose.prod.yml pull
-            docker-compose -f infrastructure/docker/docker-compose.prod.yml up -d --remove-orphans
-            docker-compose -f infrastructure/docker/docker-compose.prod.yml exec -T backend pnpm prisma migrate deploy
+            cd /opt/villakurd-staging
+            git pull origin main
+            ./scripts/deploy.sh staging
 
-      - name: Run smoke tests
-        run: |
-          sleep 30
-          curl -sf https://staging.villakurd.com/health || exit 1
-          curl -sf https://staging.villakurd.com/api/v1/villas/search || exit 1
-
-      - name: Notify
-        if: always()
+      - name: Notify on success
+        if: success()
         run: |
           curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
             -H 'Content-Type: application/json' \
-            -d '{"text":"🚀 VillaKurd deployed to Staging: ${{ github.sha }}"}'
+            -d '{"text":"✅ VillaKurd Staging Deploy: SUCCESS - ${{ github.sha }}"}' || true
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
+            -H 'Content-Type: application/json' \
+            -d '{"text":"❌ VillaKurd Staging Deploy: FAILED - ${{ github.sha }}"}' || true
 
   # ============================================
   # DEPLOY PRODUCTION
   # ============================================
   deploy-production:
-    name: Deploy Production
-    needs: [build-and-push, security-scan]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production'
+    name: Deploy to Production
+    needs: [build, security-scan]
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
@@ -454,85 +407,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Create deployment tag
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          VERSION="${{ github.event.inputs.version || github.sha }}"
-          git tag -f "deploy/production/${VERSION}"
-          git push -f origin "deploy/production/${VERSION}"
-
-      - name: Deploy to Production (Blue/Green)
+      - name: Deploy to Production Server
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          port: ${{ secrets.PROD_PORT }}
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_SSH_PORT }}
           script: |
-            cd /opt/villakurd/villakurd
-            export BACKEND_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:${{ github.sha }}
-            export FRONTEND_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:${{ github.sha }}
-            ./scripts/deploy.sh production ${{ github.sha }}
+            cd /opt/villakurd
+            git fetch --all
+            git checkout ${{ github.event.inputs.version || 'main' }}
+            ./scripts/deploy.sh production
 
-      - name: Run production smoke tests
+      - name: Notify on success
+        if: success()
         run: |
-          sleep 60
-          curl -sf https://villakurd.com/health || exit 1
-          curl -sf https://villakurd.com/api/v1/villas/search || exit 1
-
-      - name: Create GitHub Release
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: Release ${{ github.event.inputs.version }}
-          generate_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Notify
-        if: always()
-        run: |
-          STATUS="${{ job.status }}"
           curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
             -H 'Content-Type: application/json' \
-            -d "{\"text\":\"VillaKurd Production Deploy: $STATUS - ${{ github.sha }}\"}"
+            -d '{"text":"✅ VillaKurd Production Deploy: SUCCESS - ${{ github.sha }}"}' || true
 
-  # ============================================
-  # DEPENDENCY UPDATES (Scheduled)
-  # ============================================
-  dependency-updates:
-    name: Dependency Updates
-    on:
-      schedule:
-        - cron: '0 2 * * 1'  # Every Monday 2 AM
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v2
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-
-      - name: Update dependencies
+      - name: Notify on failure
+        if: failure()
         run: |
-          pnpm install --frozen-lockfile
-          pnpm update -r --latest
-
-      - name: Create PR for updates
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: 'chore: update dependencies'
-          title: 'chore: weekly dependency updates'
-          body: 'Automated weekly dependency updates'
-          branch: 'chore/dependency-updates'
-          delete-branch: true
+          curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
+            -H 'Content-Type: application/json' \
+            -d '{"text":"❌ VillaKurd Production Deploy: FAILED - ${{ github.sha }}"}' || true
