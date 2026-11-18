@@ -1,0 +1,36 @@
+# VillaKurd Mobile - Development Dockerfile
+# Expo development server
+
+FROM node:20-alpine
+
+# Install dependencies
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    libc6-compat \
+    git \
+    bash
+
+WORKDIR /app
+
+# Enable pnpm
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Install expo-cli globally
+RUN pnpm add -g expo-cli eas-cli
+
+# Install dependencies (will be overridden by volume mount)
+COPY package.json pnpm-lock.yaml* ./
+RUN pnpm install --frozen-lockfile
+
+# Copy source code (will be overridden by volume mount)
+COPY . .
+
+# Expose Expo ports
+EXPOSE 8081 19000 19001 19002
+
+# Start Expo development server
+CMD ["pnpm", "dev"]

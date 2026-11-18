@@ -1,0 +1,77 @@
+{
+  "name": "villakurd",
+  "version": "1.0.0",
+  "private": true,
+  "description": "VillaKurd - Villa rental marketplace for Kurdistan Iraq",
+  "author": "VillaKurd Team",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "backend",
+    "frontend",
+    "mobile",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "build:prod": "turbo run build --filter=backend --filter=frontend --filter=mobile",
+    "lint": "turbo run lint",
+    "lint:fix": "turbo run lint:fix",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md,yml,yaml}\"",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:coverage": "turbo run test:coverage",
+    "test:e2e": "turbo run test:e2e",
+    "db:generate": "cd backend && pnpm prisma generate",
+    "db:push": "cd backend && pnpm prisma db push",
+    "db:migrate": "cd backend && pnpm prisma migrate dev",
+    "db:migrate:prod": "cd backend && pnpm prisma migrate deploy",
+    "db:studio": "cd backend && pnpm prisma studio",
+    "db:seed": "cd backend && pnpm prisma db seed",
+    "db:reset": "cd backend && pnpm prisma migrate reset --force",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down -v",
+    "docker:logs": "docker-compose logs -f",
+    "clean": "turbo run clean && rm -rf node_modules .turbo",
+    "prepare": "husky install",
+    "commit": "git-cz",
+    "release": "standard-version",
+    "postinstall": "pnpm dlx @repo/tailwind-config generate"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.0.0",
+    "@commitlint/config-conventional": "^19.0.0",
+    "@types/node": "^20.12.0",
+    "commitizen": "^4.3.0",
+    "cz-conventional-changelog": "^3.3.0",
+    "eslint": "^8.57.0",
+    "husky": "^9.0.0",
+    "lint-staged": "^15.2.0",
+    "prettier": "^3.2.0",
+    "standard-version": "^9.5.0",
+    "turbo": "^1.13.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.1.0",
+  "config": {
+    "commitizen": {
+      "path": "./node_modules/cz-conventional-changelog"
+    }
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": [
+      "eslint --fix --max-warnings=0",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ],
+    "*.prisma": [
+      "prettier --write"
+    ]
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "layout": {
+    "nav": {
+      "search": "Search",
+      "host": "List Your Villa",
+      "login": "Log in",
+      "signup": "Sign up",
+      "dashboard": "Dashboard",
+      "becomeHost": "Become a Host"
+    }
+  },
+  "home": {
+    "meta": {
+      "title": "VillaKurd - Villa Rental Marketplace in Kurdistan",
+      "description": "Book verified villas in Erbil, Sulaymaniyah, Duhok and Halabja. Secure payments, escrow protection, and free professional photography for hosts."
+    },
+    "badge": "Kurdistan's exclusive villa-only rental marketplace",
+    "hero": {
+      "title": "Discover Kurdistan's Finest Villas",
+      "subtitle": "The first and only villa-exclusive marketplace for Kurdistan Iraq. Verified villas, secure payments, and complete peace of mind.",
+      "cta": {
+        "primary": "Search Villas",
+        "secondary": "Become a Host"
+      }
+    },
+    "search": {
+      "location": "Location",
+      "locationPlaceholder": "Where do you want to stay? (City, area, or villa name)",
+      "checkIn": "Check-in",
+      "checkOut": "Check-out",
+      "button": "Search"
+    },
+    "stats": {
+      "villas": "Villas",
+      "bookings": "Bookings",
+      "hosts": "Hosts",
+      "rating": "Guest Rating"
+    },
+    "features": {
+      "title": "Why Choose VillaKurd?",
+      "subtitle": "Our features are designed for your complete safety and peace of mind",
+      "verified": {
+        "title": "Verified Ownership",
+        "desc": "Every villa undergoes rigorous title deed and ID verification. No listing goes live without proof of ownership."
+      },
+      "escrow": {
+        "title": "Escrow Payments",
+        "desc": "Your money is held securely until 24 hours after check-in. Safe, secure, and worry-free."
+      },
+      "photography": {
+        "title": "Free Pro Photography for First 50",
+        "desc": "New hosts get professional photography worth $500 free for their first 50 villas. Showcase your property at its best."
+      },
+      "support": {
+        "title": "24/7 Support in Kurdish",
+        "desc": "Our support team speaks Kurdish, Arabic, English, and Persian. Always here to help."
+      }
+    },
+    "locations": {
+      "title": "Explore Kurdistan's Cities",
+      "subtitle": "Villas available across all four major governorates",
+      "viewAll": "View All Locations",
+      "villas": "villas",
+      "erbil": "Erbil",
+      "sulaymaniyah": "Sulaymaniyah",
+      "duhok": "Duhok",
+      "halabja": "Halabja",
+      "explore": "Explore"
+    },
+    "cta": {
+      "title": "Ready for Your Kurdistan Adventure?",
+      "subtitle": "Create unforgettable memories in the heart of Kurdistan",
+      "buttonGuest": "Search Villas",
+      "buttonHost": "List Your Villa"
+    },
+    "footer": {
+      "description": "Kurdistan's first and only villa-exclusive rental marketplace. Trust, security, and peace of mind.",
+      "forGuests": "For Guests",
+      "browseVillas": "Browse Villas",
+      "howItWorks": "How It Works",
+      "safety": "Safety",
+      "cancellation": "Cancellation Policies",
+      "helpCenter": "Help Center",
+      "forHosts": "For Hosts",
+      "listProperty": "List Your Property",
+      "pricing": "Pricing",
+      "photography": "Photography",
+      "verification": "Verification",
+      "hostDashboard": "Host Dashboard",
+      "company": "Company",
+      "about": "About Us",
+      "careers": "Careers",
+      "press": "Press",
+      "terms": "Terms of Service",
+      "privacy": "Privacy Policy",
+      "contact": "Contact",
+      "rightsReserved": "All rights reserved."
+    }
+  }
+}

@@ -1,0 +1,112 @@
+# VillaKurd - Production Kustomization
+# Apply with: kubectl apply -k infrastructure/kubernetes/overlays/production
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: villakurd
+
+resources:
+  - ../../base/backend-deployment.yaml
+
+commonLabels:
+  environment: production
+  managed-by: kustomize
+
+images:
+  - name: ghcr.io/your-org/villakurd/backend
+    newTag: "v1.0.0"
+  - name: ghcr.io/your-org/villakurd/frontend
+    newTag: "v1.0.0"
+
+configMapGenerator:
+  - name: villakurd-config
+    behavior: merge
+    literals:
+      - NODE_ENV=production
+      - LOG_LEVEL=warn
+      - METRICS_ENABLED=true
+
+secretGenerator:
+  - name: villakurd-secrets
+    behavior: merge
+    envs:
+      - .env.prod.secrets
+
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: villakurd-backend
+        namespace: villakurd
+      spec:
+        replicas: 5
+        template:
+          spec:
+            containers:
+              - name: backend
+                resources:
+                  limits:
+                    memory: "2Gi"
+                    cpu: "2000m"
+                  requests:
+                    memory: "1Gi"
+                    cpu: "500m"
+    target:
+      kind: Deployment
+      labelSelector: app=villakurd-backend
+
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: villakurd-frontend
+        namespace: villakurd
+      spec:
+        replicas: 3
+        template:
+          spec:
+            containers:
+              - name: frontend
+                resources:
+                  limits:
+                    memory: "1Gi"
+                    cpu: "1000m"
+                  requests:
+                    memory: "512Mi"
+                    cpu: "250m"
+    target:
+      kind: Deployment
+      labelSelector: app=villakurd-frontend
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: villakurd-config
+    targets:
+      - select:
+          kind: Deployment
+          labelSelector: app=villakurd-backend
+        fieldPaths:
+          - spec.template.spec.containers[0].envFrom[0].configMapRef.name
+      - select:
+          kind: Deployment
+          labelSelector: app=villakurd-frontend
+        fieldPaths:
+          - spec.template.spec.containers[0].envFrom[0].configMapRef.name
+
+configMapGenerator:
+  - name: villakurd-nginx-config
+    files:
+      - nginx.conf=../../../../docker/nginx/nginx.conf
+    options:
+      disableNameSuffixHash: true
+
+generatorOptions:
+  disableNameSuffixHash: true
+  annotations:
+    kustomize.config.k8s.io/managed-by: kustomize
+  labels:
+    app.kubernetes.io/part-of: villakurd
+    app.kubernetes.io/managed-by: kustomize

@@ -1,0 +1,1141 @@
+// VillaKurd - Prisma Database Schema
+// Generated from technical architecture specifications
+// Run: npx prisma generate && npx prisma migrate dev
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["jsonProtocol", "fullTextSearch", "postgresqlExtensions"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  // For production with connection pooling:
+  // url = env("DATABASE_URL") + "?connection_limit=20&pool_timeout=10"
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserRole {
+  GUEST
+  HOST
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+  DELETED
+}
+
+enum PropertyType {
+  VILLA
+  CHALET
+  COTTAGE
+  APARTMENT // Future: for upsell
+}
+
+enum PropertyStatus {
+  DRAFT
+  PENDING_REVIEW
+  ACTIVE
+  REJECTED
+  SUSPENDED
+  ARCHIVED
+}
+
+enum BookingStatus {
+  PENDING        // Guest requested, awaiting host confirmation
+  CONFIRMED      // Host confirmed, payment held in escrow
+  CHECKED_IN     // Guest checked in (optional feature)
+  COMPLETED      // Stay completed, payout released
+  CANCELLED      // Cancelled by guest/host/admin
+  DISPUTED       // Dispute raised, under review
+  EXPIRED        // Host didn't respond in 24h
+}
+
+enum CancellationPolicy {
+  FLEXIBLE       // Full refund 5+ days before check-in
+  MODERATE       // Full refund 7+ days, 50% after
+  STRICT         // 50% refund 7+ days, no refund after
+  SUPER_STRICT   // No refunds (for peak seasons)
+  NO_REFUND      // Non-refundable (discounted rate)
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  HELD_IN_ESCROW
+  RELEASED_TO_HOST
+}
+
+enum PaymentMethod {
+  ASIA_HAWALA
+  QI_CARD
+  ZAIN_CASH
+  WALLET         // Internal wallet balance
+  BANK_TRANSFER  // For host payouts
+  CASH_ON_DELIVERY // Future: limited use
+}
+
+enum SubscriptionPlan {
+  BASIC          // Free: 1 listing, standard support
+  PREMIUM        // $29/mo: Unlimited, featured, priority support, analytics
+  ENTERPRISE     // $99/mo: API access, white-label, dedicated manager
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  PAST_DUE
+  TRIALING
+  INCOMPLETE
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum VerificationType {
+  EMAIL
+  PHONE
+  IDENTITY       // National ID / Passport
+  PROPERTY_OWNERSHIP // Title deed / Lease agreement
+  BANK_ACCOUNT   // For payouts
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  LOCATION
+  BOOKING_REQUEST
+  BOOKING_CONFIRMATION
+  SYSTEM
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  PUSH
+  IN_APP
+}
+
+enum NotificationType {
+  BOOKING_REQUEST
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  BOOKING_REMINDER
+  PAYMENT_RECEIVED
+  PAYMENT_FAILED
+  PAYOUT_INITIATED
+  PAYOUT_COMPLETED
+  REVIEW_RECEIVED
+  MESSAGE_RECEIVED
+  VERIFICATION_UPDATE
+  PROMOTIONAL
+  SYSTEM_ALERT
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED_GUEST
+  RESOLVED_HOST
+  RESOLVED_SPLIT
+  CLOSED
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  ON_HOLD
+}
+
+// ============================================
+// CORE MODELS
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique @db.VarChar(255)
+  phone         String?   @unique @db.VarChar(20)
+  passwordHash  String    @db.VarChar(255)
+  firstName     String    @db.VarChar(100)
+  lastName      String    @db.VarChar(100)
+  avatar        String?   @db.VarChar(500)
+  role          UserRole  @default(GUEST)
+  status        UserStatus @default(PENDING_VERIFICATION)
+
+  // Verification
+  emailVerified   DateTime?
+  phoneVerified   DateTime?
+  identityVerified DateTime?
+  verificationLevel Int @default(0) // 0=none, 1=email, 2=phone, 3=identity, 4=host
+
+  // Preferences
+  locale        String    @default("ckb") // ckb, ar, en, fa
+  currency      String    @default("IQD")
+  timezone      String    @default("Asia/Baghdad")
+  marketingOptIn Boolean   @default(false)
+
+  // Security
+  lastLoginAt     DateTime?
+  lastLoginIp     String?   @db.VarChar(45)
+  failedLoginAttempts Int @default(0)
+  lockedUntil     DateTime?
+  twoFactorEnabled Boolean  @default(false)
+  twoFactorSecret String?   @db.VarChar(32)
+
+  // Referral
+  referralCode    String    @unique @db.VarChar(20)
+  referredById    String?
+  referredBy      User?     @relation("Referrals", fields: [referredById], references: [id])
+  referrals       User[]    @relation("Referrals")
+  referralCredits Decimal   @default(0) @db.Decimal(12, 2)
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  properties       Property[]       @relation("PropertyHost")
+  bookingsAsGuest  Booking[]        @relation("GuestBookings")
+  bookingsAsHost   Booking[]        @relation("HostBookings")
+  reviews          Review[]         @relation("ReviewAuthor")
+  receivedReviews  Review[]         @relation("ReviewRecipient")
+  messages         Message[]        @relation("MessageSender")
+  receivedMessages Message[]        @relation("MessageRecipient")
+  payments         Payment[]        @relation("PaymentUser")
+  payouts          Payout[]         @relation("PayoutHost")
+  subscription     Subscription?
+  verifications    Verification[]
+  notifications    Notification[]
+  devices          Device[]
+  sessions         Session[]
+  analyticsEvents  AnalyticsEvent[]
+  disputeCases     Dispute[]        @relation("DisputeGuest")
+  hostedDisputes   Dispute[]        @relation("DisputeHost")
+
+  @@index([email])
+  @@index([phone])
+  @@index([referralCode])
+  @@index([status, role])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token        String   @unique @db.VarChar(500)
+  refreshToken String   @unique @db.VarChar(500)
+  deviceId     String?
+  device       Device?  @relation(fields: [deviceId], references: [id])
+  ipAddress    String?  @db.VarChar(45)
+  userAgent    String?  @db.Text
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+  @@index([token])
+  @@index([refreshToken])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Device {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceToken   String   @unique @db.VarChar(500) // For push notifications
+  platform      String   @db.VarChar(50) // ios, android, web
+  deviceModel   String?  @db.VarChar(100)
+  appVersion    String?  @db.VarChar(20)
+  osVersion     String?  @db.VarChar(20)
+  lastActiveAt  DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  sessions Session[]
+
+  @@index([userId])
+  @@index([deviceToken])
+  @@map("devices")
+}
+
+// ============================================
+// PROPERTY MODELS
+// ============================================
+
+model Property {
+  id              String        @id @default(cuid())
+  title           String        @db.VarChar(200)
+  slug            String        @unique @db.VarChar(250)
+  description     String        @db.Text
+  shortDescription String?      @db.VarChar(500)
+  type            PropertyType  @default(VILLA)
+  status          PropertyStatus @default(DRAFT)
+
+  // Location
+  country         String        @default("IQ") @db.VarChar(2)
+  governorate     String        @db.VarChar(100) // Erbil, Sulaymaniyah, Duhok, Halabja, Kirkuk
+  district        String        @db.VarChar(100)
+  neighborhood    String?       @db.VarChar(100)
+  address         String        @db.Text
+  latitude        Decimal       @db.Decimal(10, 8)
+  longitude       Decimal       @db.Decimal(11, 8)
+  locationPoint   Unsupported("geometry(Point, 4326)") // PostGIS
+
+  // Capacity
+  maxGuests       Int
+  bedrooms        Int
+  bathrooms       Int
+  beds            Int
+  areaSqm         Int?
+
+  // Pricing (stored in IQD - Iraqi Dinar)
+  basePriceNightly Decimal      @db.Decimal(12, 2)
+  cleaningFee     Decimal       @default(0) @db.Decimal(12, 2)
+  serviceFee      Decimal       @default(0) @db.Decimal(12, 2)
+  securityDeposit Decimal       @default(0) @db.Decimal(12, 2)
+  currency        String        @default("IQD") @db.VarChar(3)
+
+  // Policies
+  checkInTime     String        @default("14:00") @db.VarChar(5)
+  checkOutTime    String        @default("12:00") @db.VarChar(5)
+  minNights       Int           @default(1)
+  maxNights       Int           @default(30)
+  instantBook     Boolean       @default(false)
+  cancellationPolicy CancellationPolicy @default(MODERATE)
+  houseRules      String?       @db.Text
+
+  // Amenities (JSON array of amenity keys)
+  amenities       Json          // ["pool", "bbq", "garden", "wifi", "ac", "parking", ...]
+
+  // Media
+  coverImage      String?       @db.VarChar(500)
+  images          String[]      @db.Text // Array of URLs
+  videoUrl        String?       @db.VarChar(500) // YouTube/Vimeo
+  virtualTourUrl  String?       @db.VarChar(500) // Matterport/etc
+
+  // SEO & Marketing
+  metaTitle       String?       @db.VarChar(60)
+  metaDescription String?       @db.VarChar(160)
+  featured        Boolean       @default(false)
+  viewCount       Int           @default(0)
+  wishlistCount   Int           @default(0)
+
+  // Verification
+  verifiedAt      DateTime?
+  verifiedBy      String?
+  verificationNotes String?     @db.Text
+
+  // Relations
+  hostId          String
+  host            User          @relation("PropertyHost", fields: [hostId], references: [id])
+  bookings        Booking[]
+  reviews         Review[]
+  availability    Availability[]
+  pricingRules    PricingRule[]
+  disputeCases    Dispute[]     @relation("DisputeProperty")
+
+  @@index([governorate, district, status])
+  @@index([latitude, longitude])
+  @@index([hostId, status])
+  @@index([status, featured])
+  @@index([basePriceNightly])
+  @@index([createdAt])
+  @@map("properties")
+}
+
+model PropertyAmenity {
+  id          String   @id @default(cuid())
+  key         String   @unique @db.VarChar(50) // "pool", "bbq", "wifi"
+  nameCkb     String   @db.VarChar(100)
+  nameAr      String   @db.VarChar(100)
+  nameEn      String   @db.VarChar(100)
+  nameFa      String   @db.VarChar(100)
+  icon        String   @db.VarChar(100) // Lucide icon name
+  category    String   @db.VarChar(50) // "outdoor", "indoor", "safety", "entertainment"
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+
+  @@map("property_amenities")
+}
+
+model Availability {
+  id          String   @id @default(cuid())
+  propertyId  String
+  property    Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  date        DateTime @db.Date
+  isAvailable Boolean  @default(true)
+  priceOverride Decimal? @db.Decimal(12, 2) // Custom price for specific date
+  note        String?  @db.VarChar(200) // "Maintenance", "Owner stay", etc.
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([propertyId, date])
+  @@index([propertyId, date])
+  @@index([date, isAvailable])
+  @@map("availabilities")
+}
+
+model PricingRule {
+  id              String   @id @default(cuid())
+  propertyId      String
+  property        Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  name            String   @db.VarChar(100)
+  type            PricingRuleType
+  // For SEASONAL: startDate, endDate
+  // For WEEKEND: daysOfWeek [0,6] (Sun, Sat)
+  // For EVENT: eventName, startDate, endDate
+  // For LAST_MINUTE: daysBefore (e.g., 3)
+  // For EARLY_BIRD: daysBefore (e.g., 60)
+  config          Json     // Flexible configuration
+  priority        Int      @default(0) // Higher = applied first
+  isActive        Boolean  @default(true)
+  validFrom       DateTime?
+  validUntil      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([propertyId, isActive])
+  @@map("pricing_rules")
+}
+
+enum PricingRuleType {
+  SEASONAL
+  WEEKEND
+  EVENT
+  LAST_MINUTE
+  EARLY_BIRD
+  WEEKLY_DISCOUNT
+  MONTHLY_DISCOUNT
+  CUSTOM
+}
+
+// ============================================
+// BOOKING MODELS
+// ============================================
+
+model Booking {
+  id              String        @id @default(cuid())
+  bookingNumber   String        @unique @db.VarChar(20) // "VK-2026-001234"
+  status          BookingStatus @default(PENDING)
+
+  // Dates
+  checkIn         DateTime      @db.Date
+  checkOut        DateTime      @db.Date
+  nights          Int
+  checkedInAt     DateTime?
+  checkedOutAt    DateTime?
+
+  // Guests
+  adults          Int
+  children        Int           @default(0)
+  infants         Int           @default(0)
+  guestNames      Json?         // Array of {firstName, lastName, age}
+
+  // Pricing Breakdown (all in IQD)
+  basePrice       Decimal       @db.Decimal(12, 2)
+  cleaningFee     Decimal       @db.Decimal(12, 2)
+  serviceFee      Decimal       @db.Decimal(12, 2)
+  taxes           Decimal       @default(0) @db.Decimal(12, 2)
+  discount        Decimal       @default(0) @db.Decimal(12, 2)
+  totalPrice      Decimal       @db.Decimal(12, 2)
+  currency        String        @default("IQD") @db.VarChar(3)
+
+  // Commission
+  platformFeePercent Decimal    @default(12) @db.Decimal(5, 2) // 12%
+  platformFee     Decimal       @db.Decimal(12, 2)
+  hostPayout      Decimal       @db.Decimal(12, 2)
+
+  // Cancellation
+  cancelledAt     DateTime?
+  cancelledBy     String?       // "guest", "host", "admin", "system"
+  cancellationReason String?    @db.Text
+  refundAmount    Decimal       @default(0) @db.Decimal(12, 2)
+
+  // Special
+  specialRequests String?       @db.Text
+  internalNotes   String?       @db.Text // Admin/host notes
+
+  // Relations
+  guestId         String
+  guest           User          @relation("GuestBookings", fields: [guestId], references: [id])
+  propertyId      String
+  property        Property      @relation(fields: [propertyId], references: [id])
+  hostId          String
+  host            User          @relation("HostBookings", fields: [hostId], references: [id])
+  payment         Payment?
+  review          Review?
+  dispute         Dispute?
+  messages        Message[]
+  timeline        BookingTimeline[]
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  confirmedAt     DateTime?
+  completedAt     DateTime?
+
+  @@index([guestId, status])
+  @@index([hostId, status])
+  @@index([propertyId, checkIn, checkOut])
+  @@index([status, checkIn])
+  @@index([bookingNumber])
+  @@map("bookings")
+}
+
+model BookingTimeline {
+  id          String   @id @default(cuid())
+  bookingId   String
+  booking     Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  event       String   @db.VarChar(50) // "created", "confirmed", "payment_held", "checked_in", "completed", "cancelled"
+  description String   @db.Text
+  metadata    Json?    // Additional data
+  createdBy   String?  // User ID or "system"
+  createdAt   DateTime @default(now())
+
+  @@index([bookingId, createdAt])
+  @@map("booking_timelines")
+}
+
+// ============================================
+// PAYMENT & FINANCIAL MODELS
+// ============================================
+
+model Payment {
+  id              String        @id @default(cuid())
+  paymentNumber   String        @unique @db.VarChar(20) // "PAY-2026-001234"
+  amount          Decimal       @db.Decimal(12, 2)
+  currency        String        @default("IQD") @db.VarChar(3)
+  status          PaymentStatus @default(PENDING)
+  method          PaymentMethod
+
+  // Gateway details
+  gatewayRef      String?       @db.VarChar(100) // Transaction ID from gateway
+  gatewayResponse Json?         // Full gateway response
+  paidAt          DateTime?
+
+  // Escrow
+  escrowReleasedAt DateTime?
+  escrowReleaseReason String?  @db.VarChar(50) // "auto_24h_after_checkin", "manual", "dispute_resolved"
+
+  // Refund
+  refundedAmount  Decimal       @default(0) @db.Decimal(12, 2)
+  refundedAt      DateTime?
+  refundReason    String?       @db.Text
+
+  // Relations
+  bookingId       String        @unique
+  booking         Booking       @relation(fields: [bookingId], references: [id])
+  userId          String
+  user            User          @relation("PaymentUser", fields: [userId], references: [id])
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([userId, status])
+  @@index([gatewayRef])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+model Payout {
+  id              String        @id @default(cuid())
+  payoutNumber    String        @unique @db.VarChar(20) // "PAYOUT-2026-001234"
+  amount          Decimal       @db.Decimal(12, 2)
+  currency        String        @default("IQD") @db.VarChar(3)
+  status          PayoutStatus  @default(PENDING)
+
+  // Period
+  periodStart     DateTime      @db.Date
+  periodEnd       DateTime      @db.Date
+
+  // Bank details (encrypted)
+  bankName        String        @db.VarChar(100)
+  accountNumber   String        @db.VarChar(50)
+  accountHolder   String        @db.VarChar(200)
+  iban            String?       @db.VarChar(50)
+
+  // Processing
+  processedAt     DateTime?
+  failureReason   String?       @db.Text
+  retryCount      Int           @default(0)
+
+  // Relations
+  hostId          String
+  host            User          @relation("PayoutHost", fields: [hostId], references: [id])
+  bookings        Booking[]     @relation("PayoutBookings")
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([hostId, status])
+  @@index([status, createdAt])
+  @@map("payouts")
+}
+
+model Wallet {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance   Decimal  @default(0) @db.Decimal(12, 2)
+  currency  String   @default("IQD") @db.VarChar(3)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions WalletTransaction[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id          String   @id @default(cuid())
+  walletId    String
+  wallet      Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type        WalletTransactionType
+  amount      Decimal  @db.Decimal(12, 2)
+  balanceAfter Decimal @db.Decimal(12, 2)
+  description String   @db.VarChar(200)
+  referenceId String?  @db.VarChar(100) // Booking ID, Payout ID, etc.
+  createdAt   DateTime @default(now())
+
+  @@index([walletId, createdAt])
+  @@map("wallet_transactions")
+}
+
+enum WalletTransactionType {
+  TOP_UP
+  BOOKING_PAYMENT
+  BOOKING_REFUND
+  PAYOUT
+  REFERRAL_BONUS
+  PROMOTIONAL_CREDIT
+  ADJUSTMENT
+}
+
+// ============================================
+// SUBSCRIPTION MODELS
+// ============================================
+
+model Subscription {
+  id                    String            @id @default(cuid())
+  plan                  SubscriptionPlan  @default(PREMIUM)
+  status                SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart    DateTime
+  currentPeriodEnd      DateTime
+  cancelAtPeriodEnd     Boolean           @default(false)
+  cancelledAt           DateTime?
+
+  // Pricing (in USD for international billing)
+  amount                Decimal           @db.Decimal(10, 2)
+  currency              String            @default("USD") @db.VarChar(3)
+  billingCycle          BillingCycle      @default(MONTHLY)
+
+  // Features
+  featuredListings      Int               @default(0) // 0 = unlimited
+  prioritySupport       Boolean           @default(false)
+  analyticsAccess       Boolean           @default(false)
+  apiAccess             Boolean           @default(false)
+  whiteLabel            Boolean           @default(false)
+  dedicatedManager      Boolean           @default(false)
+
+  // Payment
+  paymentMethodId       String?           // Stripe/Payment provider customer ID
+  latestInvoiceId       String?
+
+  // Relations
+  userId                String            @unique
+  user                  User              @relation(fields: [userId], references: [id])
+  invoices              Invoice[]
+
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@index([userId])
+  @@index([status, currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id              String        @id @default(cuid())
+  invoiceNumber   String        @unique @db.VarChar(20)
+  amount          Decimal       @db.Decimal(10, 2)
+  currency        String        @default("USD") @db.VarChar(3)
+  status          InvoiceStatus @default(PENDING)
+
+  periodStart     DateTime
+  periodEnd       DateTime
+
+  // Payment
+  paidAt          DateTime?
+  paymentMethod   String?
+  paymentRef      String?
+
+  // PDF
+  pdfUrl          String?
+
+  // Relations
+  subscriptionId  String
+  subscription    Subscription  @relation(fields: [subscriptionId], references: [id])
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([subscriptionId, status])
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  FAILED
+  VOIDED
+  REFUNDED
+}
+
+// ============================================
+// REVIEW & RATING MODELS
+// ============================================
+
+model Review {
+  id            String   @id @default(cuid())
+  rating        Int      // 1-5
+  comment       String?  @db.Text
+  response      String?  @db.Text // Host response
+  respondedAt   DateTime?
+
+  // Detailed ratings
+  cleanliness   Int?     // 1-5
+  accuracy      Int?     // 1-5
+  checkin       Int?     // 1-5
+  communication Int?     // 1-5
+  location      Int?     // 1-5
+  value         Int?     // 1-5
+
+  // Verification
+  isVerifiedStay Boolean @default(false) // Only if booking completed
+  isPublic      Boolean @default(true)
+
+  // Relations
+  bookingId     String   @unique
+  booking       Booking  @relation(fields: [bookingId], references: [id])
+  authorId      String
+  author        User     @relation("ReviewAuthor", fields: [authorId], references: [id])
+  recipientId   String   // Host ID
+  recipient     User     @relation("ReviewRecipient", fields: [recipientId], references: [id])
+  propertyId    String
+  property      Property @relation(fields: [propertyId], references: [id])
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([propertyId, isPublic])
+  @@index([authorId])
+  @@index([recipientId])
+  @@index([rating])
+  @@map("reviews")
+}
+
+// ============================================
+// MESSAGING MODELS
+// ============================================
+
+model Conversation {
+  id          String   @id @default(cuid())
+  subject     String?  @db.VarChar(200)
+  bookingId   String?  @unique
+  booking     Booking? @relation(fields: [bookingId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  lastMessageAt DateTime?
+
+  participants ConversationParticipant[]
+  messages    Message[]
+
+  @@index([bookingId])
+  @@index([updatedAt])
+  @@map("conversations")
+}
+
+model ConversationParticipant {
+  id             String   @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt     DateTime?
+  isArchived     Boolean  @default(false)
+  joinedAt       DateTime @default(now())
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id              String       @id @default(cuid())
+  conversationId  String
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId        String
+  sender          User         @relation("MessageSender", fields: [senderId], references: [id])
+  type            MessageType  @default(TEXT)
+  content         String       @db.Text
+  metadata        Json?        // For images: {url, width, height}, location: {lat, lng}
+  readAt          DateTime?
+  createdAt       DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@map("messages")
+}
+
+// ============================================
+// NOTIFICATION MODELS
+// ============================================
+
+model Notification {
+  id              String             @id @default(cuid())
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type            NotificationType
+  channel         NotificationChannel
+  title           String             @db.VarChar(200)
+  body            String             @db.Text
+  data            Json?              // Deep link data, action buttons
+  readAt          DateTime?
+  sentAt          DateTime?
+  failedAt        DateTime?
+  failureReason   String?            @db.Text
+  createdAt       DateTime           @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+  @@index([type, channel])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Email preferences
+  emailBookingRequests   Boolean @default(true)
+  emailBookingConfirmed  Boolean @default(true)
+  emailBookingReminders  Boolean @default(true)
+  emailPayments          Boolean @default(true)
+  emailPayouts           Boolean @default(true)
+  emailReviews           Boolean @default(true)
+  emailMessages          Boolean @default(true)
+  emailPromotional       Boolean @default(false)
+  emailWeeklyDigest      Boolean @default(true)
+
+  // SMS preferences
+  smsBookingRequests     Boolean @default(true)
+  smsBookingConfirmed    Boolean @default(true)
+  smsBookingReminders    Boolean @default(true)
+  smsPayments            Boolean @default(false)
+  smsPayouts             Boolean @default(true)
+  smsSecurity            Boolean @default(true)
+
+  // Push preferences
+  pushBookingRequests    Boolean @default(true)
+  pushBookingConfirmed   Boolean @default(true)
+  pushBookingReminders   Boolean @default(true)
+  pushPayments           Boolean @default(true)
+  pushMessages           Boolean @default(true)
+  pushPromotional        Boolean @default(false)
+
+  // In-app (always on for important)
+  inAppAll               Boolean @default(true)
+
+  // Quiet hours
+  quietHoursStart        String?  @db.VarChar(5) // "22:00"
+  quietHoursEnd          String?  @db.VarChar(5) // "08:00"
+  timezone               String   @default("Asia/Baghdad")
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("notification_preferences")
+}
+
+// ============================================
+// VERIFICATION MODELS
+// ============================================
+
+model Verification {
+  id              String            @id @default(cuid())
+  userId          String
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type            VerificationType
+  status          VerificationStatus @default(PENDING)
+
+  // Documents
+  documentFront   String?           @db.VarChar(500) // URL
+  documentBack    String?           @db.VarChar(500)
+  selfie          String?           @db.VarChar(500)
+
+  // Data
+  documentNumber  String?           @db.VarChar(50) // Encrypted
+  expiryDate      DateTime?
+
+  // Review
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  rejectionReason String?           @db.Text
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([userId, type])
+  @@index([status])
+  @@map("verifications")
+}
+
+// ============================================
+// DISPUTE MODELS
+// ============================================
+
+model Dispute {
+  id              String         @id @default(cuid())
+  disputeNumber   String         @unique @db.VarChar(20) // "DISP-2026-001234"
+  status          DisputeStatus  @default(OPEN)
+  reason          DisputeReason
+  description     String         @db.Text
+
+  // Evidence
+  guestEvidence   Json?          // Array of {type, url, description}
+  hostEvidence    Json?
+
+  // Resolution
+  resolution      DisputeResolution?
+  resolvedAmount  Decimal?       @db.Decimal(12, 2)
+  resolvedAt      DateTime?
+  resolvedBy      String?        // Admin ID
+
+  // Relations
+  bookingId       String         @unique
+  booking         Booking        @relation(fields: [bookingId], references: [id])
+  guestId         String
+  guest           User           @relation("DisputeGuest", fields: [guestId], references: [id])
+  hostId          String
+  host            User           @relation("DisputeHost", fields: [hostId], references: [id])
+  propertyId      String
+  property        Property       @relation("DisputeProperty", fields: [propertyId], references: [id])
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([guestId, status])
+  @@index([hostId, status])
+  @@index([status, createdAt])
+  @@map("disputes")
+}
+
+enum DisputeReason {
+  PROPERTY_NOT_AS_DESCRIBED
+  CLEANLINESS_ISSUES
+  AMENITIES_MISSING
+  HOST_CANCELLED
+  GUEST_DAMAGE
+  UNAUTHORIZED_CHARGES
+  CHECK_IN_ISSUES
+  SAFETY_CONCERNS
+  OTHER
+}
+
+enum DisputeResolution {
+  REFUND_GUEST_FULL
+  REFUND_GUEST_PARTIAL
+  PAY_HOST_FULL
+  PAY_HOST_PARTIAL
+  SPLIT
+  NO_ACTION
+}
+
+// ============================================
+// ANALYTICS & TRACKING MODELS
+// ============================================
+
+model AnalyticsEvent {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  sessionId   String   @db.VarChar(100)
+  eventName   String   @db.VarChar(100)
+  properties  Json?
+  url         String?  @db.VarChar(500)
+  referrer    String?  @db.VarChar(500)
+  userAgent   String?  @db.Text
+  ipAddress   String?  @db.VarChar(45)
+  country     String?  @db.VarChar(2)
+  city        String?  @db.VarChar(100)
+  deviceType  String?  @db.VarChar(20) // mobile, desktop, tablet
+  browser     String?  @db.VarChar(50)
+  os          String?  @db.VarChar(50)
+  createdAt   DateTime @default(now())
+
+  @@index([eventName, createdAt])
+  @@index([userId, createdAt])
+  @@index([sessionId])
+  @@map("analytics_events")
+}
+
+model DailyMetric {
+  id          String   @id @default(cuid())
+  date        DateTime @db.Date
+  metric      String   @db.VarChar(50)
+  value       Decimal  @db.Decimal(20, 4)
+  dimensions  Json?    // {governorate: "Erbil", propertyType: "VILLA"}
+  createdAt   DateTime @default(now())
+
+  @@unique([date, metric, dimensions])
+  @@index([date, metric])
+  @@map("daily_metrics")
+}
+
+// ============================================
+// SYSTEM & CONFIGURATION MODELS
+// ============================================
+
+model SystemConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique @db.VarChar(100)
+  value       Json
+  description String?  @db.Text
+  isPublic    Boolean  @default(false) // Can be exposed to frontend
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_configs")
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  action      String   @db.VarChar(100)
+  entityType  String   @db.VarChar(50)
+  entityId    String   @db.VarChar(100)
+  oldValues   Json?
+  newValues   Json?
+  ipAddress   String?  @db.VarChar(45)
+  userAgent   String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================
+// CUSTOM TYPES & EXTENSIONS
+// ============================================
+
+// For PostgreSQL extensions
+// CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+// CREATE EXTENSION IF NOT EXISTS "postgis";
+// CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+// CREATE EXTENSION IF NOT EXISTS "btree_gin";
+
+// Custom composite types would be defined in migration SQL
+
+// ============================================
+// SEED DATA (run via prisma db seed)
+// ============================================
+
+/*
+// Property Amenities Seed
+const amenities = [
+  { key: 'pool', nameCkw: 'پۆڵ', nameAr: 'مسبح', nameEn: 'Swimming Pool', nameFa: 'استخر', icon: 'waves', category: 'outdoor' },
+  { key: 'bbq', nameCkw: 'باربەکيو', nameAr: 'شواء', nameEn: 'BBQ Grill', nameFa: 'بارب큐', icon: 'flame', category: 'outdoor' },
+  { key: 'garden', nameCkw: 'باغ', nameAr: 'حديقة', nameEn: 'Garden', nameFa: 'باغ', icon: 'tree-pine', category: 'outdoor' },
+  { key: 'wifi', nameCkw: 'وای‌فای', nameAr: 'واي فاي', nameEn: 'WiFi', nameFa: 'وای‌فای', icon: 'wifi', category: 'indoor' },
+  { key: 'ac', nameCkw: 'کولر', nameAr: 'تكييف', nameEn: 'Air Conditioning', nameFa: 'کولر', icon: 'snowflake', category: 'indoor' },
+  { key: 'heating', nameCkw: 'گرمایش', nameAr: 'تدفئة', nameEn: 'Heating', nameFa: 'گرمایش', icon: 'thermometer', category: 'indoor' },
+  { key: 'kitchen', nameCkw: 'کیتچن', nameAr: 'مطبخ', nameEn: 'Full Kitchen', nameFa: 'آشپزخانه کامل', icon: 'chef-hat', category: 'indoor' },
+  { key: 'washer', nameCkw: 'شوێر', nameAr: 'غسالة', nameEn: 'Washing Machine', nameFa: 'ماشین لباسشویی', icon: 'droplets', category: 'indoor' },
+  { key: 'parking', nameCkw: 'پارکینگ', nameAr: 'موقف سيارات', nameEn: 'Parking', nameFa: 'پارکینگ', icon: 'car', category: 'outdoor' },
+  { key: 'security', nameCkw: 'ئاسایش', nameAr: 'أمن', nameEn: 'Security', nameFa: 'امنیت', icon: 'shield', category: 'safety' },
+  { key: 'fire_extinguisher', nameCkw: 'دەنگی ئاگر', nameAr: 'طفاية حريق', nameEn: 'Fire Extinguisher', nameFa: 'کپسول آتش‌نشانی', icon: 'flame-kindling', category: 'safety' },
+  { key: 'first_aid', nameCkw: 'یارمەتی یەکەم', nameAr: 'إسعافات أولية', nameEn: 'First Aid Kit', nameFa: 'کمک‌های اولیه', icon: 'cross', category: 'safety' },
+  { key: 'tv', nameCkw: 'تەلەفیزیۆن', nameAr: 'تلفزيون', nameEn: 'TV', nameFa: 'تلویزیون', icon: 'tv', category: 'entertainment' },
+  { key: 'sound_system', nameCkw: 'سیستەمی دەنگ', nameAr: 'نظام صوتي', nameEn: 'Sound System', nameFa: 'سیستم صدا', icon: 'speaker', category: 'entertainment' },
+  { key: 'games', nameCkw: 'خێزان', nameAr: 'ألعاب', nameEn: 'Board Games', nameFa: 'بازی‌های میزی', icon: 'gamepad-2', category: 'entertainment' },
+  { key: 'workspace', nameCkw: 'ماڵپەڕی کار', nameAr: 'مساحة عمل', nameEn: 'Workspace', nameFa: 'فضای کار', icon: 'laptop', category: 'indoor' },
+  { key: 'pet_friendly', nameCkw: 'هاوڵاتی کەچڵ', nameAr: 'الحيوانات الأليفة', nameEn: 'Pet Friendly', nameFa: 'دوستان حیوانات', icon: 'paw-print', category: 'outdoor' },
+  { key: 'ev_charger', nameCkw: 'چارژەر برقی', nameAr: 'شاحن كهربائي', nameEn: 'EV Charger', nameFa: 'شارژر برقی', icon: 'zap', category: 'outdoor' },
+];
+*/
+
+// ============================================
+// INDEXES SUMMARY (for migration reference)
+// ============================================
+
+/*
+-- Critical indexes for performance:
+
+-- Users
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_phone ON users(phone) WHERE phone IS NOT NULL;
+CREATE INDEX idx_users_referral_code ON users(referral_code);
+CREATE INDEX idx_users_status_role ON users(status, role);
+
+-- Properties
+CREATE INDEX idx_properties_location ON properties USING GIST (location_point);
+CREATE INDEX idx_properties_governorate_district_status ON properties(governorate, district, status);
+CREATE INDEX idx_properties_host_status ON properties(host_id, status);
+CREATE INDEX idx_properties_status_featured ON properties(status, featured) WHERE featured = true;
+CREATE INDEX idx_properties_price ON properties(base_price_nightly);
+CREATE INDEX idx_properties_search_text ON properties USING GIN (to_tsvector('arabic', title || ' ' || description));
+
+-- Availabilities
+CREATE INDEX idx_availabilities_property_date ON availabilities(property_id, date);
+CREATE INDEX idx_availabilities_date_available ON availabilities(date, is_available) WHERE is_available = true;
+
+-- Bookings
+CREATE INDEX idx_bookings_guest_status ON bookings(guest_id, status);
+CREATE INDEX idx_bookings_host_status ON bookings(host_id, status);
+CREATE INDEX idx_bookings_property_dates ON bookings(property_id, check_in, check_out) WHERE status IN ('CONFIRMED', 'PENDING');
+CREATE INDEX idx_bookings_status_checkin ON bookings(status, check_in);
+
+-- Payments
+CREATE INDEX idx_payments_user_status ON payments(user_id, status);
+CREATE INDEX idx_payments_gateway_ref ON payments(gateway_ref);
+CREATE INDEX idx_payments_status_created ON payments(status, created_at);
+
+-- Reviews
+CREATE INDEX idx_reviews_property_public ON reviews(property_id, is_public) WHERE is_public = true;
+CREATE INDEX idx_reviews_author ON reviews(author_id);
+CREATE INDEX idx_reviews_recipient ON reviews(recipient_id);
+
+-- Messages
+CREATE INDEX idx_messages_conversation_created ON messages(conversation_id, created_at);
+
+-- Analytics
+CREATE INDEX idx_analytics_event_created ON analytics_events(event_name, created_at);
+CREATE INDEX idx_analytics_user_created ON analytics_events(user_id, created_at);
+CREATE INDEX idx_analytics_session ON analytics_events(session_id);
+*/

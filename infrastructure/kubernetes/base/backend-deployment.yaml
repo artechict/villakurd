@@ -1,0 +1,525 @@
+# VillaKurd - Kubernetes Base Manifests
+# Apply with: kubectl apply -k infrastructure/kubernetes/overlays/production
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: villakurd
+  labels:
+    name: villakurd
+    environment: production
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: villakurd-secrets
+  namespace: villakurd
+type: Opaque
+stringData:
+  # Database
+  database-url: "postgresql://villakurd:${DB_PASSWORD}@postgres:5432/villakurd?schema=public"
+  # Redis
+  redis-url: "redis://redis:6379"
+  # JWT
+  jwt-secret: "${JWT_SECRET}"
+  jwt-refresh-secret: "${JWT_REFRESH_SECRET}"
+  # NextAuth
+  nextauth-secret: "${NEXTAUTH_SECRET}"
+  # Payment Gateways
+  asia-hawala-merchant-id: "${ASIA_HAWALA_MERCHANT_ID}"
+  asia-hawala-terminal-id: "${ASIA_HAWALA_TERMINAL_ID}"
+  asia-hawala-password: "${ASIA_HAWALA_PASSWORD}"
+  qi-card-merchant-id: "${QI_CARD_MERCHANT_ID}"
+  qi-card-terminal-id: "${QI_CARD_TERMINAL_ID}"
+  qi-card-password: "${QI_CARD_PASSWORD}"
+  zain-cash-merchant-id: "${ZAIN_CASH_MERCHANT_ID}"
+  zain-cash-password: "${ZAIN_CASH_PASSWORD}"
+  # Email
+  smtp-password: "${SMTP_PASSWORD}"
+  # SMS
+  sms-api-key: "${SMS_API_KEY}"
+  # Monitoring
+  sentry-dsn: "${SENTRY_DSN}"
+  # Grafana
+  grafana-password: "${GRAFANA_PASSWORD}"
+  # Elasticsearch
+  elastic-password: "${ELASTIC_PASSWORD}"
+  # MinIO
+  minio-access-key: "${MINIO_ACCESS_KEY}"
+  minio-secret-key: "${MINIO_SECRET_KEY}"
+  # Mapbox
+  mapbox-token: "${MAPBOX_TOKEN}"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: villakurd-config
+  namespace: villakurd
+data:
+  NODE_ENV: "production"
+  APP_NAME: "VillaKurd"
+  API_PREFIX: "/api/v1"
+  PORT: "4000"
+  FRONTEND_URL: "https://villakurd.com"
+  CORS_ORIGIN: "https://villakurd.com,https://www.villakurd.com"
+  LOG_LEVEL: "warn"
+  METRICS_ENABLED: "true"
+  TRACING_ENABLED: "false"
+  PLATFORM_COMMISSION_PERCENT: "12"
+  CLEANING_FEE_PERCENT: "5"
+  SERVICE_FEE_PERCENT: "3"
+  CURRENCY: "IQD"
+  DEFAULT_LOCALE: "ckb"
+  SUPPORTED_LOCALES: "ckb,ar,en,fa"
+  TIMEZONE: "Asia/Baghdad"
+  FEATURE_MOBILE_APP: "true"
+  FEATURE_INSTANT_BOOKING: "true"
+  FEATURE_DYNAMIC_PRICING: "true"
+  FEATURE_ESCROW: "true"
+  MAX_FILE_SIZE: "10485760"
+  ALLOWED_IMAGE_TYPES: "image/jpeg,image/png,image/webp,image/heic"
+  IMAGE_QUALITY: "80"
+  ELASTICSEARCH_URL: "http://elasticsearch:9200"
+  MINIO_ENDPOINT: "http://minio:9000"
+  MINIO_BUCKET: "villakurd"
+  ASIA_HAWALA_BASE_URL: "https://pgw.asiahawala.com"
+  QI_CARD_BASE_URL: "https://pgw.qicard.net"
+  ZAIN_CASH_BASE_URL: "https://api.zaincash.iq"
+  SMTP_HOST: "smtp.sendgrid.net"
+  SMTP_PORT: "587"
+  SMTP_USER: "apikey"
+  SMTP_FROM: "VillaKurd <noreply@villakurd.com>"
+  SMTP_SECURE: "false"
+  SMS_PROVIDER: "local"
+  SMS_SENDER_ID: "VillaKurd"
+  SMS_BASE_URL: "https://api.your-sms-provider.iq"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: villakurd-backend
+  namespace: villakurd
+  labels:
+    app: villakurd-backend
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: villakurd-backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: villakurd-backend
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: villakurd-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+      - name: backend
+        image: ghcr.io/your-org/villakurd/backend:${VERSION}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 4000
+          name: http
+        - containerPort: 9229
+          name: debug
+        envFrom:
+        - configMapRef:
+            name: villakurd-config
+        - secretRef:
+            name: villakurd-secrets
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 4000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 4000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 4000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: logs
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - villakurd-backend
+              topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: villakurd-backend
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: villakurd-backend
+  namespace: villakurd
+  labels:
+    app: villakurd-backend
+spec:
+  selector:
+    app: villakurd-backend
+  ports:
+  - port: 4000
+    targetPort: 4000
+    name: http
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: villakurd-frontend
+  namespace: villakurd
+  labels:
+    app: villakurd-frontend
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: villakurd-frontend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: villakurd-frontend
+        version: v1
+    spec:
+      serviceAccountName: villakurd-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+      - name: frontend
+        image: ghcr.io/your-org/villakurd/frontend:${VERSION}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: http
+        envFrom:
+        - configMapRef:
+            name: villakurd-config
+        - secretRef:
+            name: villakurd-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - villakurd-frontend
+              topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: villakurd-frontend
+  namespace: villakurd
+  labels:
+    app: villakurd-frontend
+spec:
+  selector:
+    app: villakurd-frontend
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  type: ClusterIP
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: villakurd-ingress
+  namespace: villakurd
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1s"
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "90"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "90"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/hsts: "true"
+    nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
+    nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
+    nginx.ingress.kubernetes.io/hsts-preload: "true"
+spec:
+  tls:
+  - hosts:
+    - villakurd.com
+    - www.villakurd.com
+    - api.villakurd.com
+    - minio.villakurd.com
+    secretName: villakurd-tls
+  rules:
+  - host: villakurd.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: villakurd-backend
+            port:
+              number: 4000
+      - path: /socket.io
+        pathType: Prefix
+        backend:
+          service:
+            name: villakurd-backend
+            port:
+              number: 4000
+      - path: /health
+        pathType: Prefix
+        backend:
+          service:
+            name: villakurd-backend
+            port:
+              number: 4000
+      - path: /ready
+        pathType: Prefix
+        backend:
+          service:
+            name: villakurd-backend
+            port:
+              number: 4000
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: villakurd-frontend
+            port:
+              number: 3000
+  - host: www.villakurd.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: villakurd-frontend
+            port:
+              number: 3000
+  - host: api.villakurd.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: villakurd-backend
+            port:
+              number: 4000
+  - host: minio.villakurd.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: minio
+            port:
+              number: 9000
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: villakurd-sa
+  namespace: villakurd
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: villakurd-role
+  namespace: villakurd
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: villakurd-role-binding
+  namespace: villakurd
+subjects:
+- kind: ServiceAccount
+  name: villakurd-sa
+  namespace: villakurd
+roleRef:
+  kind: Role
+  name: villakurd-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: villakurd-backend-hpa
+  namespace: villakurd
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: villakurd-backend
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 4
+        periodSeconds: 15
+      selectPolicy: Max
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: villakurd-frontend-hpa
+  namespace: villakurd
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: villakurd-frontend
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70

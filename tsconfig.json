@@ -1,0 +1,46 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "tsBuildInfoFile": ".tsbuildinfo",
+    "baseUrl": ".",
+    "paths": {
+      "@villakurd/*": ["*"],
+      "@villakurd/backend/*": ["backend/src/*"],
+      "@villakurd/frontend/*": ["frontend/src/*"],
+      "@villakurd/mobile/*": ["mobile/src/*"],
+      "@villakurd/shared/*": ["shared/*"]
+    }
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "build",
+    ".next",
+    ".expo",
+    ".turbo",
+    "coverage",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx"
+  ],
+  "references": [
+    { "path": "./backend" },
+    { "path": "./frontend" },
+    { "path": "./mobile" },
+    { "path": "./shared" }
+  ]
+}

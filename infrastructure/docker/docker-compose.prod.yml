@@ -1,0 +1,378 @@
+# VillaKurd - Production Docker Compose
+# Usage: docker-compose -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+services:
+  # Nginx Reverse Proxy + SSL Termination
+  nginx:
+    image: nginx:alpine
+    container_name: villakurd-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/www:/var/www/certbot:ro
+      - nginx_cache:/var/cache/nginx
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Backend API (Production)
+  backend:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    container_name: villakurd-backend-prod
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_BUCKET=villakurd
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - PORT=4000
+      - FRONTEND_URL=https://${DOMAIN_NAME}
+      - CORS_ORIGIN=https://${DOMAIN_NAME},https://www.${DOMAIN_NAME}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_FROM=${SMTP_FROM}
+      - ASIA_HAWALA_MERCHANT_ID=${ASIA_HAWALA_MERCHANT_ID}
+      - ASIA_HAWALA_TERMINAL_ID=${ASIA_HAWALA_TERMINAL_ID
+      - ASIA_HAWALA_PASSWORD=${ASIA_HAWALA_PASSWORD}
+      - ASIA_HAWALA_CALLBACK_URL=https://${DOMAIN_NAME}/api/v1/payments/webhooks/asia-hawala
+      - QI_CARD_MERCHANT_ID=${QI_CARD_MERCHANT_ID}
+      - QI_CARD_TERMINAL_ID=${QI_CARD_TERMINAL_ID}
+      - QI_CARD_PASSWORD=${QI_CARD_PASSWORD}
+      - QI_CARD_CALLBACK_URL=https://${DOMAIN_NAME}/api/v1/payments/webhooks/qi-card
+      - ZAIN_CASH_MERCHANT_ID=${ZAIN_CASH_MERCHANT_ID}
+      - ZAIN_CASH_PASSWORD=${ZAIN_CASH_PASSWORD}
+      - ZAIN_CASH_CALLBACK_URL=https://${DOMAIN_NAME}/api/v1/payments/webhooks/zain-cash
+      - SENTRY_DSN=${SENTRY_DSN}
+      - LOG_LEVEL=warn
+    volumes:
+      - backend_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Frontend (Production - Next.js Standalone)
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    container_name: villakurd-frontend-prod
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=https://${DOMAIN_NAME}/api/v1
+      - NEXTAUTH_URL=https://${DOMAIN_NAME}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - NEXT_PUBLIC_MAPBOX_TOKEN=${MAPBOX_TOKEN}
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # PostgreSQL 16 with PostGIS
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: villakurd-postgres-prod
+    environment:
+      POSTGRES_DB: villakurd
+      POSTGRES_USER: villakurd
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./postgres/backup:/backup
+    ports:
+      - "127.0.0.1:5432:5432"  # Only localhost for security
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U villakurd -d villakurd"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Redis 7 with Persistence
+  redis:
+    image: redis:7-alpine
+    container_name: villakurd-redis-prod
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru --save 60 1 --save 300 10
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Elasticsearch 8
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: villakurd-elasticsearch-prod
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=true
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - indices.memory.index_buffer_size=10%
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+      - ./elasticsearch/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+    ports:
+      - "127.0.0.1:9200:9200"
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f -u elastic:${ELASTIC_PASSWORD} http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # MinIO (S3-compatible)
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-24Z
+    container_name: villakurd-minio-prod
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+      MINIO_BROWSER_REDIRECT_URL: https://minio.${DOMAIN_NAME}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Certbot for Let's Encrypt SSL
+  certbot:
+    image: certbot/certbot:latest
+    container_name: villakurd-certbot
+    volumes:
+      - ./nginx/ssl:/etc/letsencrypt
+      - ./nginx/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+
+  # Prometheus for Metrics
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: villakurd-prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+
+  # Grafana for Dashboards
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: villakurd-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+    depends_on:
+      - prometheus
+
+  # Log Aggregation (Loki + Promtail)
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: villakurd-loki
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: villakurd-promtail
+    volumes:
+      - ./loki/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - backend_logs:/app/logs:ro
+    restart: unless-stopped
+    networks:
+      - villakurd-network
+    depends_on:
+      - loki
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  es_data:
+    driver: local
+  minio_data:
+    driver: local
+  nginx_cache:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
+    driver: local
+  backend_logs:
+    driver: local
+
+networks:
+  villakurd-network:
+    driver: bridge
+    name: villakurd-prod-network

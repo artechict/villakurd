@@ -1,0 +1,120 @@
+{
+  "expo": {
+    "name": "VillaKurd",
+    "slug": "villakurd",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#22c55e"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.villakurd.app",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "VillaKurd needs your location to show nearby villas",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "VillaKurd needs your location to show nearby villas",
+        "NSCameraUsageDescription": "VillaKurd needs camera access to upload villa photos",
+        "NSPhotoLibraryUsageDescription": "VillaKurd needs photo library access to upload villa photos",
+        "NSMicrophoneUsageDescription": "VillaKurd needs microphone access for voice messages"
+      },
+      "associatedDomains": [
+        "applinks:villakurd.com"
+      ]
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#22c55e"
+      },
+      "package": "com.villakurd.app",
+      "versionCode": 1,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "RECORD_AUDIO",
+        "VIBRATE",
+        "RECEIVE_BOOT_COMPLETED"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "villakurd.com",
+              "pathPrefix": "/"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-secure-store",
+      "expo-notifications",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow VillaKurd to use your location to find nearby villas."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow VillaKurd to access your photos for uploading villa images."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow VillaKurd to access your camera for taking villa photos."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#22c55e",
+          "sounds": ["./assets/notification-sound.wav"]
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "tsconfigPaths": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "your-eas-project-id"
+      }
+    },
+    "owner": "your-expo-username",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/your-eas-project-id"
+    }
+  }
+}

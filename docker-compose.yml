@@ -1,0 +1,233 @@
+# VillaKurd - Docker Compose for Local Development
+# Usage: docker-compose up -d
+
+version: '3.8'
+
+services:
+  # PostgreSQL 16 with PostGIS for geospatial queries
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: villakurd-postgres
+    environment:
+      POSTGRES_DB: villakurd
+      POSTGRES_USER: villakurd
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-villakurd_dev_password}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U villakurd -d villakurd"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Redis 7 for caching, sessions, and job queues
+  redis:
+    image: redis:7-alpine
+    container_name: villakurd-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --save 60 1 --save 300 10
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # Elasticsearch 8 for search and analytics
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: villakurd-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.monitoring.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - indices.memory.index_buffer_size=10%
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # MinIO (S3-compatible) for object storage
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-24Z
+    container_name: villakurd-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-villakurd}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-villakurd_secret_key}
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Backend API (Fastify)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: villakurd-backend
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://villakurd:${DB_PASSWORD:-villakurd_dev_password}@postgres:5432/villakurd?schema=public
+      - REDIS_URL=redis://redis:6379
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-villakurd}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-villakurd_secret_key}
+      - MINIO_BUCKET=villakurd
+      - JWT_SECRET=${JWT_SECRET:-dev_jwt_secret_change_in_production}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-dev_refresh_secret_change_in_production}
+      - PORT=4000
+      - FRONTEND_URL=http://localhost:3000
+      - MOBILE_URL=exp://localhost:8081
+    ports:
+      - "4000:4000"
+      - "9229:9229" # Debug port
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - /app/dist
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: pnpm dev
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Frontend (Next.js)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: villakurd-frontend
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:4000
+      - NEXTAUTH_URL=http://localhost:3000
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev_nextauth_secret_change_in_production}
+      - NEXT_PUBLIC_MAPBOX_TOKEN=${MAPBOX_TOKEN:-}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+    command: pnpm dev
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Mobile (Expo) - runs on host network for device testing
+  # mobile:
+  #   build:
+  #     context: ./mobile
+  #     dockerfile: Dockerfile.dev
+  #   container_name: villakurd-mobile
+  #   environment:
+  #     - NODE_ENV=development
+  #     - EXPO_PUBLIC_API_URL=http://host.docker.internal:4000
+  #   ports:
+  #     - "8081:8081"
+  #     - "19000:19000"
+  #     - "19001:19001"
+  #     - "19002:19002"
+  #   volumes:
+  #     - ./mobile:/app
+  #     - /app/node_modules
+  #   depends_on:
+  #     - backend
+  #   command: pnpm dev
+  #   network_mode: host
+
+  # Mailhog for email testing
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: villakurd-mailhog
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Web UI
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # MinIO Console for bucket management
+  # Access at http://localhost:9001 (user: villakurd, pass: villakurd_secret_key)
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  es_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  default:
+    name: villakurd-network
+    driver: bridge

@@ -1,0 +1,40 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
+    "baseUrl": "./src",
+    "paths": {
+      "@/*": ["./*"],
+      "@modules/*": ["modules/*"],
+      "@shared/*": ["shared/*"],
+      "@config/*": ["config/*"],
+      "@plugins/*": ["plugins/*"],
+      "@utils/*": ["shared/utils/*"],
+      "@types/*": ["types/*"]
+    }
+  },
+  "include": [
+    "src/**/*",
+    "prisma/**/*",
+    "tests/**/*",
+    "vitest.config.ts",
+    "vitest.e2e.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "coverage",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ]
+}
