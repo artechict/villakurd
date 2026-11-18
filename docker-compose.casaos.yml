@@ -1,0 +1,323 @@
+# VillaKurd - CasaOS Docker Compose
+# Install: CasaOS → Apps → Custom Install → Docker Compose → Paste this → Install
+# Or: curl -fsSL https://raw.githubusercontent.com/artechict/villakurd/main/docker-compose.casaos.yml | docker compose -f - up -d
+
+version: '3.8'
+
+services:
+  # ============================================
+  # DATABASES
+  # ============================================
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: villakurd-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: villakurd
+      POSTGRES_USER: villakurd
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-villakurd_secure_pass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U villakurd -d villakurd"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - villakurd-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: villakurd-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - villakurd-network
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: villakurd-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - villakurd-network
+
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-24Z
+    container_name: villakurd-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: villakurd
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-villakurd_secret_key}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
+    networks:
+      - villakurd-network
+
+  # ============================================
+  # APPLICATION
+  # ============================================
+  backend:
+    image: ghcr.io/artechict/villakurd/backend:main
+    container_name: villakurd-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://villakurd:${DB_PASSWORD:-villakurd_secure_pass}@postgres:5432/villakurd?schema=public
+      REDIS_URL: redis://redis:6379
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: villakurd
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-villakurd_secret_key}
+      MINIO_BUCKET: villakurd
+      MINIO_USE_SSL: "false"
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-${JWT_SECRET}}
+      SESSION_SECRET: ${SESSION_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      FRONTEND_URL: https://villakurd.com
+      API_URL: https://api.villakurd.com
+      CORS_ORIGIN: https://villakurd.com,https://app.villakurd.com
+      # Payment Gateways
+      ASIAHAWALA_MERCHANT_ID: ${ASIAHAWALA_MERCHANT_ID}
+      ASIAHAWALA_API_KEY: ${ASIAHAWALA_API_KEY}
+      QICARD_MERCHANT_ID: ${QICARD_MERCHANT_ID}
+      QICARD_TERMINAL_ID: ${QICARD_TERMINAL_ID}
+      QICARD_PASSWORD: ${QICARD_PASSWORD}
+      ZAINCASH_MERCHANT_ID: ${ZAINCASH_MERCHANT_ID}
+      ZAINCASH_API_KEY: ${ZAINCASH_API_KEY}
+      # Email
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM:-noreply@villakurd.com}
+    volumes:
+      - backend_uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - villakurd-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  frontend:
+    image: ghcr.io/artechict/villakurd/frontend:main
+    container_name: villakurd-frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: https://api.villakurd.com
+      NEXT_PUBLIC_FRONTEND_URL: https://villakurd.com
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - villakurd-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # ============================================
+  # REVERSE PROXY (NGINX)
+  # ============================================
+  nginx:
+    image: nginx:alpine
+    container_name: villakurd-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./infrastructure/docker/nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_cache:/var/cache/nginx
+      - letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - villakurd-network
+
+  # ============================================
+  # MONITORING (Optional - enable if needed)
+  # ============================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: villakurd-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./infrastructure/docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - villakurd-network
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: villakurd-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - ./infrastructure/docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - villakurd-network
+    profiles:
+      - monitoring
+
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: villakurd-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./infrastructure/docker/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    networks:
+      - villakurd-network
+    profiles:
+      - monitoring
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: villakurd-promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./infrastructure/docker/loki/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - villakurd-network
+    profiles:
+      - monitoring
+
+  # ============================================
+  # MIGRATION JOB (runs once on deploy)
+  # ============================================
+  migrate:
+    image: ghcr.io/artechict/villakurd/backend:main
+    container_name: villakurd-migrate
+    command: ["sh", "-c", "pnpm prisma migrate deploy && echo 'Migration completed'"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://villakurd:${DB_PASSWORD:-villakurd_secure_pass}@postgres:5432/villakurd?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - villakurd-network
+    profiles:
+      - migrate
+    deploy:
+      restart_policy:
+        condition: none
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  elasticsearch_data:
+    driver: local
+  minio_data:
+    driver: local
+  backend_uploads:
+    driver: local
+  nginx_cache:
+    driver: local
+  letsencrypt:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
+    driver: local
+
+networks:
+  villakurd-network:
+    driver: bridge
+    name: villakurd-network

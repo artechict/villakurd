@@ -1,0 +1,95 @@
+# VillaKurd - Auto Deploy Workflow
+# Triggers on push to main → deploys to server via SSH
+# Requires: SSH_PRIVATE_KEY, SERVER_HOST, SERVER_USER, SERVER_SSH_PORT secrets
+
+name: Auto Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy environment'
+        required: true
+        default: 'production'
+        type: choice
+        options: [staging, production]
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_SSH_PORT }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /opt/villakurd
+            echo "🔄 Pulling latest code..."
+            git fetch --all
+            git reset --hard origin/main
+            git pull origin main
+
+            echo "📦 Pulling latest Docker images..."
+            docker compose -f docker-compose.casaos.yml pull
+
+            echo "🗄️ Running migrations..."
+            docker compose -f docker-compose.casaos.yml --profile migrate up migrate
+
+            echo "🚀 Restarting services..."
+            docker compose -f docker-compose.casaos.yml up -d
+
+            echo "🏥 Waiting for health checks..."
+            for service in postgres redis elasticsearch minio backend frontend nginx; do
+              echo "  Checking $service..."
+              timeout=120
+              while [ $timeout -gt 0 ]; do
+                health=$(docker inspect --format='{{.State.Health.Status}}' "villakurd-${service}" 2>/dev/null || echo "none")
+                if [ "$health" = "healthy" ]; then
+                  echo "  ✅ $service healthy"
+                  break
+                elif [ "$health" = "unhealthy" ]; then
+                  echo "  ❌ $service unhealthy"
+                  docker logs "villakurd-${service}" --tail 50
+                  exit 1
+                fi
+                sleep 5
+                timeout=$((timeout - 5))
+              done
+              if [ $timeout -le 0 ]; then
+                echo "  ❌ Timeout waiting for $service"
+                exit 1
+              fi
+            done
+
+            echo "✅ Deployment completed successfully!"
+
+      - name: Notify Success
+        if: success()
+        run: |
+          curl -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+            -H 'Content-Type: application/json' \
+            -d '{"text":"✅ VillaKurd Auto-Deploy: SUCCESS - ${{ github.sha }} (${{ github.event.inputs.environment || 'production' }})"}' || true
+
+      - name: Notify Failure
+        if: failure()
+        run: |
+          curl -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+            -H 'Content-Type: application/json' \
+            -d '{"text":"❌ VillaKurd Auto-Deploy: FAILED - ${{ github.sha }} (${{ github.event.inputs.environment || 'production' }})"}' || true
