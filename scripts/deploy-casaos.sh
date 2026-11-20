@@ -107,7 +107,7 @@ setup_env() {
 pull_images() {
     log_info "Pulling latest Docker images..."
     cd "$INSTALL_DIR"
-    docker compose -f "$COMPOSE_FILE" pull
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" pull
     log_success "Images pulled"
 }
 
@@ -115,7 +115,7 @@ pull_images() {
 run_migrations() {
     log_info "Running database migrations..."
     cd "$INSTALL_DIR"
-    docker compose -f "$COMPOSE_FILE" --profile migrate up migrate
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile migrate up migrate
     log_success "Migrations completed"
 }
 
@@ -123,7 +123,7 @@ run_migrations() {
 start_services() {
     log_info "Starting services..."
     cd "$INSTALL_DIR"
-    docker compose -f "$COMPOSE_FILE" up -d
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
     log_success "Services started"
 }
 
@@ -143,7 +143,7 @@ wait_health() {
                 break
             elif [[ "$health" == "unhealthy" ]]; then
                 log_error "$service is unhealthy"
-                docker logs "villakurd-${service}" --tail 50
+                docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" logs "villakurd-${service}" --tail 50
                 exit 1
             fi
 
@@ -175,12 +175,12 @@ setup_ssl() {
 
     # Stop nginx temporarily to free port 80
     cd "$INSTALL_DIR"
-    docker compose -f "$COMPOSE_FILE" stop nginx
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" stop nginx
 
     # Get certificates
     certbot certonly --standalone -d "$DOMAIN" -d "api.$DOMAIN" -d "app.$DOMAIN" --non-interactive --agree-tos --email "admin@$DOMAIN" || {
         log_error "Certbot failed. Restarting nginx..."
-        docker compose -f "$COMPOSE_FILE" start nginx
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" start nginx
         return 1
     }
 
@@ -190,10 +190,10 @@ setup_ssl() {
     cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem" infrastructure/docker/nginx/ssl/villakurd.com.key
 
     # Restart nginx
-    docker compose -f "$COMPOSE_FILE" start nginx
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" start nginx
 
     # Setup auto-renewal
-    (crontab -l 2>/dev/null | grep -v certbot; echo "0 3 * * * certbot renew --quiet --deploy-hook 'cd $INSTALL_DIR && docker compose -f $COMPOSE_FILE restart nginx'") | crontab -
+    (crontab -l 2>/dev/null | grep -v certbot; echo "0 3 * * * certbot renew --quiet --deploy-hook 'cd $INSTALL_DIR && docker compose -f $COMPOSE_FILE --env-file $ENV_FILE restart nginx'") | crontab -
 
     log_success "SSL certificates installed for $DOMAIN"
 }
@@ -202,7 +202,7 @@ setup_ssl() {
 show_status() {
     log_info "VillaKurd Status:"
     cd "$INSTALL_DIR"
-    docker compose -f "$COMPOSE_FILE" ps
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps
     echo ""
     log_info "Access URLs:"
     echo "  Frontend:  https://villakurd.com (or your domain)"
@@ -266,8 +266,8 @@ main() {
     echo ""
     log_info "Next steps:"
     echo "  1. Edit $INSTALL_DIR/$ENV_FILE with payment gateway keys"
-    echo "  2. Restart backend: docker compose -f $COMPOSE_FILE restart backend"
-    echo "  3. Check logs: docker compose -f $COMPOSE_FILE logs -f backend"
+    echo "  2. Restart backend: docker compose -f $COMPOSE_FILE --env-file $ENV_FILE restart backend"
+    echo "  3. Check logs: docker compose -f $COMPOSE_FILE --env-file $ENV_FILE logs -f backend"
     echo "  4. Auto-deploy on push: GitHub Actions will handle it"
 }
 
